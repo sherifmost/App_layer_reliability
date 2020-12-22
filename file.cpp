@@ -28,7 +28,8 @@ bool file_exists(string file_path)
 // Uses ifstream to write to the file
 void write_file(string file_path, string data)
 {
-    ofstream file(file_path);
+    std::ofstream file;
+    file.open(file_path, std::ios_base::app);
     file << data;
     file.close();
 }

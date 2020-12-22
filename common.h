@@ -3,6 +3,7 @@
 #include <string.h>
 #include <bits/stdc++.h>
 #include <sys/time.h>
+#include<pthread.h>
 // Separators used
 #define FILE_SEPARATOR '/'
 #define CARRIAGE_RETURN '\r'

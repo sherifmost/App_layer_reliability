@@ -2,11 +2,18 @@
 // To call it use the command ./my_server_stop_wait
 // Based on the tutorial for socket programming provided by Beejy
 #include "server.h"
+// Timeout in ms for sending the file request (defined to be a second)
+#define TIMEOUT 1
 
 // The variables used
 string port_number = DEFAULT_PORT;
 int random_seed = 1;
 float probability = 0.0;
+uint32_t curr_seqno = 0;
+// For obtaining the client's address
+struct sockaddr_in *client_addr;
+socklen_t len = sizeof(client_addr);
+
 
 // The main function for running the server
 // Should contain an infinite loop where the listener keeps
@@ -37,54 +44,75 @@ int main(int argc, char **argv)
     // Creating a UDP socket
     int sockfd = open_socket();
     // Receive the requested file from the client and get his address info
-    struct sockaddr_in client_addr;
     memset(&client_addr, 0, sizeof(client_addr));
-    string file_name = receive_file_request(sockfd, &client_addr);
-
-
-
-
-
-
-
-
-
-    // // In case a port number was specified we initialize it
-    // // Server is called by ./my_server port_number
-    // if (argc > 1)
-    // {
-    //     port_number = argv[1];
-    // }
-    // cout << "Server running on port " << port_number << endl;
-    // // file descriptor of the socket at which this server is listening
-    // int listen_fd = get_server_fd(port_number);
-    // if (listen_fd == -1)
-    // {
-    //     fprintf(stderr, "error occured in obtainnig the server fd.\n");
-    //     exit(1);
-    // }
-    // // initialize first the signal handler to reap te zombie processes
-    reap_zombies();
-    // cout << "Server started listening on localhost at port number " << port_number << endl;
-    // cout << "waiting for connections...." << endl;
-    // handle_connections(listen_fd);
+    string file_name = receive_file_request(sockfd);
+    // close the socket and end if the file doesn't exist
+    if (!file_exists(file_name))
+    {
+        cout << "file doesn't exist, shutting down..." << endl;
+        send_fin(sockfd);
+        close(sockfd);
+        exit(0);
+    }
+    // Start a timeout for the socket
+    set_timeout(sockfd);
+    // start the main operation of sending UDP datagrams using the stop and wait technique
+    // first, read the file to be sent
+    string file_contents = read_file_bin(file_name);
+    // Checks if a timeout occurs
+    bool timeout = false;
+    // A buffer to send the packet
+    char packet_buf[MAX_LEN];
+    // The packet being sent
+    data_packet packet;
+    // to detect whether we finished sending the file
+    bool finished = false;
+    // To determine where to start from when sending the next datagram
+    int file_start = 0;
+    // The main operation to be done
+    while (1)
+    {
+        // in case we didn't timeout get next packet
+        if (!timeout)
+        {
+            // get length of the data to be sent
+            int length = min(MAX_DATA_SIZE, (int)file_contents.length() - file_start);
+            packet = create_next_datagram(file_start,length, file_contents, packet_buf);
+            // update the start of the file
+            file_start += length;
+            // Check whether we read the whole file
+            if (file_start == (int)file_contents.length())
+            {
+                finished = true;
+            }
+        }
+        else
+        {
+            cout << "timeout for packet with seqno " << packet.seqno << " retransmitting.." << endl;
+        }
+        // send or resend the current packet
+        send_datagram(sockfd, packet, packet_buf);
+        int num_rec = handle_response(sockfd);
+        // Check whether or not a timeout occured
+        if (num_rec < 0)
+        {
+            timeout = true;
+        }
+        else
+        {
+            timeout = false;
+        }
+        // in case we finished send a fin meessage and shut down
+        if (finished && !timeout)
+        {
+            cout << "finished sending the file, shutting down..." << endl;
+            send_fin(sockfd);
+            close(sockfd);
+            exit(0);
+        }
+        
+    }
     return 0;
-}
-// A handler to handle zombie children
-// n this way the parent wait for any child processes (pid = -1)
-// and while there are zombie process (waitpid() return value is >0)
-// it keep looping on calling wait.
-void sigchild_handler(int s)
-{
-    (void)s; // quiet unused variable warning
-
-    // waitpid() might overwrite errno, so we save and restore it:
-    int saved_errno = errno;
-
-    while (waitpid(-1, NULL, WNOHANG) > 0)
-        ;
-
-    errno = saved_errno;
 }
 
 int open_socket()
@@ -107,12 +135,6 @@ int open_socket()
         // The program exits as port is used
         exit(1);
     }
-    
-    return sockfd;
-}
-// Handles incoming file request from client and fills his address
-string receive_file_request(int sockfd, struct sockaddr_in *client_addr)
-{
     struct addrinfo hints, *server_addr;
     int error_get_addr;
     // initializing hints as specified in the requirements:
@@ -137,7 +159,12 @@ string receive_file_request(int sockfd, struct sockaddr_in *client_addr)
         perror("bind failed");
         exit(EXIT_FAILURE);
     }
-    socklen_t len = sizeof(client_addr);
+    return sockfd;
+}
+
+// Handles incoming file request from client and fills his address
+string receive_file_request(int sockfd)
+{
     // receive the request in a buffer
     char buffer[MAX_LEN];
     int num_rec = recvfrom(sockfd, (char *)buffer, MAX_LEN,
@@ -156,79 +183,21 @@ string receive_file_request(int sockfd, struct sockaddr_in *client_addr)
     return file_request.data;
 }
 
-// Create a socket and obtain the file descriptor of the socket////////////////////////////////////////
-int temp()
+// A handler to handle zombie children
+// n this way the parent wait for any child processes (pid = -1)
+// and while there are zombie process (waitpid() return value is >0)
+// it keep looping on calling wait.
+void sigchild_handler(int s)
 {
-    // Initialized with -1 to indicate errors.
-    int listen_sockfd = -1;
-    // The address info structs
-    // hints: the hints provided to obtain the address info of the server
-    struct addrinfo hints, *servinfo, *it;
-    int error_get_addr;
-    // for the workaround
-    int yes = 1;
-    // initializing hints as specified in the requirements:
-    // Local host(my IP),IP V4, TCP
-    memset(&hints, 0, sizeof hints);
-    // IP V4
-    hints.ai_family = AF_INET;
-    // Reliable stream (TCP)
-    hints.ai_socktype = SOCK_STREAM;
-    // Use my IP (Local host)
-    hints.ai_flags = AI_PASSIVE;
+    (void)s; // quiet unused variable warning
 
-    // Obtaining the server address info
-    if ((error_get_addr = getaddrinfo(NULL, port_number.c_str(), &hints, &servinfo)) != 0)
-    {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(error_get_addr));
-        return -1;
-    }
-    // loop through all the results and bind to the first socket we can
-    for (it = servinfo; it != NULL; it = it->ai_next)
-    {
-        // Try obtaining the socket and returning its fd
-        // returns -1 for error
-        if ((listen_sockfd = socket(it->ai_family, it->ai_socktype,
-                                    it->ai_protocol)) == -1)
-        {
-            // prints a message corresponding to value of errno
-            perror("In calling function get_server_fd, server: socket");
-            continue;
-        }
-        // A workaround described by Beejy to overcome the case where address is returned to be in use
-        if (setsockopt(listen_sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-                       sizeof(int)) == -1)
-        {
-            perror("in calling function get_server_fd, setsockopt");
-            // The program exits as port is used
-            exit(1);
-        }
-        // Trying to bind the socket to the port
-        if (bind(listen_sockfd, it->ai_addr, it->ai_addrlen) == -1)
-        {
-            close(listen_sockfd);
-            perror("in calling function get_server_fd, server: bind");
-            // Try the next socket
-            continue;
-        }
-        // If suitable socket found break
-        break;
-    }
-    // Freeing the structure as it is not needed any more
-    freeaddrinfo(servinfo);
-    // If no suitable socket was found
-    if (it == NULL)
-    {
-        fprintf(stderr, "server: failed to find a suitable socket to bind\n");
-        exit(1);
-    }
-    // Try listening on this socket
-    if (listen(listen_sockfd, BACKLOG) == -1)
-    {
-        perror("In calling function get_server_fd, listen");
-        exit(1);
-    }
-    return listen_sockfd;
+    // waitpid() might overwrite errno, so we save and restore it:
+    int saved_errno = errno;
+
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+
+    errno = saved_errno;
 }
 
 void reap_zombies()
@@ -245,73 +214,112 @@ void reap_zombies()
     }
 }
 
-// Non-persistent at first then would be updated to be persistent by use of select()
-void handle_connections(int listen_fd)
-{
-    // The fd of the client trying to connect
-    int client_fd;
-    // keeps the client's address information
-    struct sockaddr_storage client_addr;
-    socklen_t sin_size = sizeof client_addr;
-    while (1)
-    {
-        // Listener (parent) process would accept a connection if one exists
-        // Then it would delegate the hanlding to a child process
-        client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &sin_size);
-        if (client_fd == -1)
-        {
-            perror("In handle_connections, accept");
-            continue;
-        }
-        // To obtain the correct byte ordering (endian)
-        // consider IPV4 only
-        char s[INET_ADDRSTRLEN];
-        if (client_addr.ss_family == AF_INET)
-        {
-            inet_ntop(AF_INET, &(((struct sockaddr_in *)&client_addr)->sin_addr),
-                      s, sizeof s);
-            cout << "Accepted connection from: " << s << endl;
-        }
-        else
-        {
-            cout << "server supports only IPV4" << endl;
-            continue;
-        }
-        // Creating a child process to delegate the work with the accepted connection to it
-        if (!fork())
-        { // this is the child worker process
-            // child doesn't need the listener
-            close(listen_fd);
-            // Receiving the client request to process it
-            int num_received;
-            char buf[MAX_DATA_SIZE];
-            if ((num_received = recv(client_fd, buf, MAX_DATA_SIZE - 1, 0)) == -1)
-            {
-                perror("recv");
-                exit(1);
-            }
-            // assuring that the buffer ends with a null character
-            buf[num_received] = '\0';
-            // parsing the received request to handle it
-            // get and post requests are handled
-            string request_string = string(buf);
-            cout << "received request from " << s << " :" << endl
-                 << request_string << endl;
-            // handling the request
-            // http_request request = string_to_request(request_string);
-            // handle_request(request, client_fd);
-            close(client_fd);
-            // Exit the child process for now
-            exit(0);
-        }
-        // parent doesn't need this for now connection is non-persistent
-        close(client_fd);
-    }
-}
-
 // To simulate packet drop in a random manner
 bool to_be_sent()
 {
     float rand_num = (float)rand() / RAND_MAX;
     return rand_num > probability;
+}
+
+void update_seqno()
+{
+    curr_seqno = 1 - curr_seqno;
+}
+
+void send_datagram(int sockfd, data_packet packet, char *packet_buf)
+{
+
+    // check whether we should drop the packet or not
+    if (to_be_sent())
+    {
+        cout << "file content sent with length " << packet.len << " and seqno " << packet.seqno << endl;
+        if (sendto(sockfd, packet_buf, packet.len,
+                   0, (struct sockaddr *)&client_addr,
+                   len) < 0)
+        {
+            fprintf(stderr, "Couldn't send the request\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    else
+    {
+        // drop the packet by not sending it
+        cout << "packet dropped seqno " << packet.seqno << endl;
+    }
+}
+
+int handle_response(int sockfd)
+{
+    // receive the ack in a buffer
+    char buffer[MAX_LEN];
+    int num_rec = recvfrom(sockfd, (char *)buffer, MAX_LEN,
+                           0, (struct sockaddr *)&client_addr,
+                           &len);
+    // This would indicate a timeout
+    if (num_rec <= 0)
+        return num_rec;
+    // copy the meaningfull part and parse it
+    char packet_buf[num_rec];
+    memcpy(packet_buf, buffer, num_rec);
+    ack_packet packet = string_to_ack_packet(packet_buf);
+    // check whether this is a duplicate ack (NAK), if so do nothing else update the seqno and kill the child
+    if (packet.ackno != curr_seqno)
+    {
+        cout << "Duplicate ack received for seqno " << packet.ackno << endl;
+        return -1;
+    }
+    else
+    {
+        cout << "Ack received for packet with seqno " << packet.ackno << endl;
+        // go to the next state
+        update_seqno();
+    }
+    return num_rec;
+}
+
+data_packet create_next_datagram(int file_start,int length, string total_data, char *packet_buf)
+{
+    // create the datagram to be sent
+    data_packet packet;
+    packet.seqno = curr_seqno;
+    packet.chksum = 0;
+    packet.len = length + 8;
+    // copy content to the packet buffer
+    fill_buffer(total_data, packet.data, file_start, length);
+    // Serialize this packet to be able to send it
+    data_packet_to_string(packet, packet_buf);
+    return packet;
+}
+
+void set_timeout(int sockfd)
+{
+    struct timeval timeout;
+    timeout.tv_sec = TIMEOUT;
+    timeout.tv_usec = 0;
+
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
+                   sizeof(timeout)) < 0)
+        perror("setsockopt timeout failed\n");
+}
+
+// To send a fin packet (AKA Ack packet)
+void send_fin(int sockfd)
+{
+    // Build a fin packet to request the file
+    ack_packet fin;
+    fin.ackno = 0;
+    fin.chksum = 0;
+    fin.len = 8;
+    // Serialize this packet to be able to send it
+    char packet_buf[fin.len];
+    ack_packet_to_string(fin, packet_buf);
+    // send the fin message
+    if (sendto(sockfd, packet_buf, fin.len,
+               0, (struct sockaddr *)&client_addr,
+               len) < 0)
+    {
+        fprintf(stderr, "Couldn't send the request\n");
+        exit(EXIT_FAILURE);
+    }
+    cout << "Request to finish was sent to client" << endl;
 }
