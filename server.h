@@ -18,6 +18,8 @@
 #define DEFAULT_PORT "3000"
 // file used to enter the arguments
 #define INPUT_PATH "server.in"
+// file used to keep statistics to study the congestion control etc.
+#define STATISTICS_PATH "server_statistics.txt"
 #define BACKLOG 100 // how many pending connections queue will hold
 
 // Functions implemented
@@ -37,9 +39,9 @@ void update_seqno();
 // sends a packet indicating that the server is shutting down
 void send_fin(int sockfd); 
 // Creates the next datagram
-data_packet create_next_datagram(int file_start,int length,string total_data,char* packet_buf);
+data_packet create_next_datagram(int sno,int file_start,int length,string total_data,char* packet_buf);
 // sends the next datagram according to the packet loss probability
-void send_datagram(int sockfd, data_packet packet, char *packet_buf);
+void send_datagram(int sockfd, data_packet packet);
 // receives the response from the client and reacts accrordingly, 
 int handle_response(int sockfd); 
 // Sets the timeout for the socket receive
