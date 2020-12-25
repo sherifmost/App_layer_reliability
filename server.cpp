@@ -2,8 +2,8 @@
 // To call it use the command ./my_server_stop_wait
 // Based on the tutorial for socket programming provided by Beejy
 #include "server.h"
-// Timeout in ms for sending the file request (defined to be a second)
-#define TIMEOUT 1000
+// Timeout in ms for sending the file request
+#define TIMEOUT 150
 
 // The variables used
 string port_number = DEFAULT_PORT;
@@ -51,7 +51,10 @@ int main(int argc, char **argv)
     int sockfd = open_socket();
     // Receive the requested file from the client and get his address info
     memset(&client_addr, 0, sizeof(client_addr));
+    // initialize timing to study the server performance
     string file_name = receive_file_request(sockfd);
+    // Record start time
+    auto start = std::chrono::high_resolution_clock::now();
     // close the socket and end if the file doesn't exist
     if (!file_exists(file_name))
     {
@@ -82,7 +85,7 @@ int main(int argc, char **argv)
     while (1)
     {
         // Write to the file the statistics
-        string curr_round = "Round: " + to_string(round) + " CWND: " + to_string(cwnd) + '\n';
+        string curr_round = to_string(round) + "," + to_string(cwnd) + '\n';
         write_file(STATISTICS_PATH, curr_round);
         if((num_rec > 1) && !finished){
         packets.clear();
@@ -146,6 +149,9 @@ int main(int argc, char **argv)
             cout << "finished sending the file, shutting down..." << endl;
             send_fin(sockfd);
             close(sockfd);
+            auto finish = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = finish - start;
+            std::cout << "Elapsed time in seconds: " << elapsed.count() << " s\n";
             exit(0);
         }
         // update round and cwnd

@@ -1,9 +1,9 @@
 // Implements the UDP server with stop and wait functionality
 // To call it use the command ./my_server_stop_wait
 // Based on the tutorial for socket programming provided by Beejy
-#include "server.h"
-// Timeout in ms for sending the file request (defined to be a second)
-#define TIMEOUT 1
+#include "server_stop_wait.h"
+// Timeout in ms for sending the file request
+#define TIMEOUT 150
 
 // The variables used
 string port_number = DEFAULT_PORT;
@@ -46,6 +46,8 @@ int main(int argc, char **argv)
     // Receive the requested file from the client and get his address info
     memset(&client_addr, 0, sizeof(client_addr));
     string file_name = receive_file_request(sockfd);
+    // Record start time
+    auto start = std::chrono::high_resolution_clock::now();
     // close the socket and end if the file doesn't exist
     if (!file_exists(file_name))
     {
@@ -108,6 +110,9 @@ int main(int argc, char **argv)
             cout << "finished sending the file, shutting down..." << endl;
             send_fin(sockfd);
             close(sockfd);
+            auto finish = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = finish - start;
+            std::cout << "Elapsed time in seconds: " << elapsed.count() << " s\n";
             exit(0);
         }
         
@@ -294,8 +299,8 @@ data_packet create_next_datagram(int file_start,int length, string total_data, c
 void set_timeout(int sockfd)
 {
     struct timeval timeout;
-    timeout.tv_sec = TIMEOUT;
-    timeout.tv_usec = 0;
+    timeout.tv_sec = TIMEOUT / 1000;
+    timeout.tv_usec = (TIMEOUT % 1000) * 1000;
 
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
                    sizeof(timeout)) < 0)
